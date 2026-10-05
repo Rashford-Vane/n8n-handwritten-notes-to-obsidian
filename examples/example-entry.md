@@ -1,17 +1,22 @@
-<!-- One entry as the workflow appends it to the target note (sample content). -->
-
---- date: 2026-09-17 tags: [productivity, deep work, ideas] ---  # Highest leverage  ## Highest leverage
-
-i) CLI
-ii) 5 (Big) deep work periods
-   - complete first 20 hrs
-iii) 1 person business setup
-iv) Night review
-
+---
+title: "Weekly review: Code/Finance"
+date: 2026-10-05
+first_captured: 2026-10-05T21:30
+tags:
+  - weekly-review
+  - habits
+  - finance
+type: raw-note
+status: inbox
+source: "email: Brain Dump"
+photo: "IMG_2041.jpg"
 ---
 
-Claude Code is like having a new dog. I do this, you do that. Asks important questions.
+# Weekly review: Code/Finance
 
----
-
-Book the dentist
+- Chess: visualization drills
+- Health & fitness
+- Atomic Habits: learning loop
+  - Always 1%
+- Finish
+  - Skills in demand

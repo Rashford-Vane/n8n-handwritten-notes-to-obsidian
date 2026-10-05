@@ -1,45 +1,83 @@
 {
-  "name": "Handwritten notes to Obsidian (Brain Dump)",
+  "name": "Handwritten notes to Obsidian (Brain Dump) v2",
   "nodes": [
     {
-      "id": "3bcc699b-4c6e-4f8e-91ef-06d45f33d759",
+      "id": "d5003795-0b6e-552e-b647-7cadfaaf3d74",
+      "name": "Email Trigger (IMAP)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.1,
+      "position": [
+        220,
+        300
+      ],
       "parameters": {
         "downloadAttachments": true,
         "options": {
           "customEmailConfig": "[\"UNSEEN\", [\"SUBJECT\", \"Brain Dump\"]]"
         }
-      },
-      "type": "n8n-nodes-base.emailReadImap",
-      "typeVersion": 2.1,
-      "position": [
-        0,
-        0
-      ],
-      "name": "Email Trigger (IMAP)",
-      "credentials": {
-        "imap": {
-          "name": "IMAP account"
-        }
       }
     },
     {
-      "id": "15ec08cd-6aa9-4d95-b429-0205f2549f9c",
-      "parameters": {
-        "jsCode": "const items = $input.all();\n\nfor (let i = 0; i < items.length; i++) {\n  // 1. Pull the image out of n8n's hidden buffer storage\n  const buffer = await this.helpers.getBinaryDataBuffer(i, 'attachment_0');\n  \n  // 2. Convert the image bytes into a Base64 text string\n  items[i].json.image_base64 = buffer.toString('base64');\n}\n\nreturn items;"
-      },
+      "id": "60e59cf5-d25b-521c-8963-47e420311ab7",
+      "name": "Split photos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        208,
-        0
+        440,
+        300
       ],
-      "name": "Code in JavaScript"
+      "parameters": {
+        "jsCode": "// One output item per photo, across every email in the batch.\n// An email with no usable photo becomes an item with `error` set, which the next IF routes to _failed/.\nconst SUPPORTED = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];\nconst MAX_BASE64 = 5 * 1024 * 1024; // Claude API limit per image\nconst BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic', heif: 'image/heif' };\n\n// Small content hash so the same photo sent twice is only written once\nfunction fnv1a(buf) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < buf.length; i++) { h ^= buf[i]; h = Math.imul(h, 0x01000193); }\n  return (h >>> 0).toString(16).padStart(8, '0');\n}\n\nconst out = [];\nconst seen = new Set(); // photos already queued in this batch; repeats from earlier runs are caught after Claude\nconst emails = $input.all();\nfor (let i = 0; i < emails.length; i++) {\n  const email = emails[i].json;\n  const meta = {\n    subject: email.subject || '',\n    from: email.from || '',\n    received: email.date || '',\n    messageId: (email.metadata || {})['message-id'] || '',\n    uid: (email.attributes || {}).uid || '',\n  };\n  const binary = emails[i].binary || {};\n  const keys = Object.keys(binary)\n    .filter(k => k.startsWith('attachment_'))\n    .sort((a, b) => Number(a.split('_')[1]) - Number(b.split('_')[1]));\n\n  let photoIndex = 0;\n  for (const key of keys) {\n    const att = binary[key];\n    const ext = (att.fileExtension || (att.fileName || '').split('.').pop() || '').toLowerCase();\n    let mimeType = (att.mimeType || '').toLowerCase().replace('image/jpg', 'image/jpeg');\n    if (!mimeType.startsWith('image/')) mimeType = BY_EXT[ext] || '';\n    if (!mimeType) continue; // not a photo (PDF, signature file, ...)\n\n    photoIndex++;\n    const buffer = await this.helpers.getBinaryDataBuffer(i, key);\n    const hash = `${buffer.length}-${fnv1a(buffer)}`;\n    if (seen.has(hash)) continue; // same photo twice in this batch\n    seen.add(hash);\n    const image_base64 = buffer.toString('base64');\n    let error = '';\n    if (!SUPPORTED.includes(mimeType)) {\n      error = `Unsupported image type ${mimeType}. Claude accepts JPEG, PNG, GIF and WebP (on iPhone: Settings > Camera > Formats > Most Compatible).`;\n    } else if (image_base64.length > MAX_BASE64) {\n      error = `Photo is too large (${(buffer.length / 1048576).toFixed(1)} MB; the limit is about 3.7 MB). Send it at a smaller size.`;\n    }\n    out.push({\n      json: { ...meta, photoIndex, photoName: att.fileName || `${key}.${ext}`, mimeType, sizeBytes: buffer.length, hash, image_base64, error },\n      pairedItem: { item: i },\n    });\n  }\n  if (photoIndex === 0) {\n    out.push({\n      json: { ...meta, photoIndex: 0, error: 'Email has no photo attachment. Photos pasted inline into the email body are not picked up, so attach the photo as a file.' },\n      pairedItem: { item: i },\n    });\n  }\n}\nreturn out;\n"
+      }
     },
     {
-      "id": "c5c1532d-5e0c-490d-8e82-ba6053852f13",
+      "id": "caf8934b-cb00-5f6d-8bf5-ebaa11a9a5a1",
+      "name": "Photo OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d0c916ca-32df-5010-bb1d-9ec743175407",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "37fe8f12-70e6-5764-9c78-46a4152464c6",
+      "name": "Claude (vision)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        880,
+        200
+      ],
       "parameters": {
         "method": "POST",
         "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -55,180 +93,258 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"model\": \"claude-sonnet-5\",\n  \"max_tokens\": 1024,\n  \"system\": \"Transcribe the handwritten note in the image. Respond ONLY with valid JSON matching this schema: {\\\"title\\\": \\\"string\\\", \\\"date\\\": \\\"string\\\", \\\"tags\\\": [\\\"array\\\"], \\\"body_markdown\\\": \\\"string\\\"}\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": [\n      {\n        \"type\": \"image\",\n        \"source\": {\n          \"type\": \"base64\",\n          \"media_type\": \"image/jpeg\",\n          \"data\": \"{{ $json.image_base64 }}\"\n        }\n      },\n      {\n        \"type\": \"text\",\n        \"text\": \"Transcribe and structure this note.\"\n      }\n    ]\n  }]\n}",
-        "options": {},
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth"
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.4,
-      "position": [
-        416,
-        0
-      ],
-      "name": "HTTP Request",
-      "credentials": {
-        "httpHeaderAuth": {
-          "name": "Anthropic API Key (x-api-key header)"
+        "jsonBody": "={{ JSON.stringify({\n  model: 'claude-sonnet-5',\n  max_tokens: 4096,\n  system: \"You transcribe photos of handwritten notebook pages. Transcribe faithfully: keep the author's wording, spelling and line order; mark words you can't read as [illegible]. Use markdown for lists, numbering and headings in body_markdown, and don't repeat the title as a heading there. title: a short title for the page (use its own heading if it has one). date: the date written on the page as YYYY-MM-DD, or an empty string if there is none. tags: 2 to 6 short lowercase topic tags.\",\n  output_config: { format: { type: 'json_schema', schema: {\"type\": \"object\", \"properties\": {\"title\": {\"type\": \"string\"}, \"date\": {\"type\": \"string\"}, \"tags\": {\"type\": \"array\", \"items\": {\"type\": \"string\"} }, \"body_markdown\": {\"type\": \"string\"} }, \"required\": [\"title\", \"date\", \"tags\", \"body_markdown\"], \"additionalProperties\": false} } },\n  messages: [{\n    role: 'user',\n    content: [\n      { type: 'image', source: { type: 'base64', media_type: $json.mimeType, data: $json.image_base64 } },\n      { type: 'text', text: 'Transcribe and structure this note.' }\n    ]\n  }]\n}) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1500
+            }
+          },
+          "timeout": 120000
         }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "e976b5d6-8ace-5914-91f2-0e5ca6fd2b93",
+      "name": "Parse reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Pull Claude's JSON out of the reply. Any problem becomes `error`, which the next IF routes to _failed/.\nconst res = $input.item.json;\nconst { image_base64, ...source } = $('Split photos').item.json;\n\nlet note = {};\nlet error = '';\nconst text = (res.content || [])\n  .filter(block => block.type === 'text')\n  .map(block => block.text)\n  .join('')\n  .replace(/```(json)?/gi, '')\n  .trim();\n\nif (res.stop_reason === 'max_tokens') {\n  error = 'Reply was cut off (max_tokens reached).';\n} else if (res.stop_reason === 'refusal') {\n  error = 'Claude declined to transcribe this photo.';\n} else {\n  try {\n    note = JSON.parse(text);\n  } catch (e) {\n    error = `Reply was not valid JSON: ${e.message}`;\n  }\n  if (!error && typeof note.body_markdown !== 'string') error = 'Reply is missing body_markdown.';\n}\n\nreturn { json: { ...source, ...note, error, usage: res.usage } };\n"
       }
     },
     {
-      "id": "12cc6041-2c32-4f8e-a559-2d4417fb712d",
-      "parameters": {
-        "jsCode": "// 1. Grab the raw text response from Claude\nlet rawText = $input.item.json.content[0].text;\n\n// 2. Strip out the Markdown formatting (```json and ```)\nrawText = rawText.replace(/```json/gi, '').replace(/```/gi, '').trim();\n\n// 3. Convert it from a text string into usable data fields\nconst parsedData = JSON.parse(rawText);\n\n// 4. Pass it to the next node\nreturn { json: parsedData };"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "b1dd2085-c0da-501d-a387-81ccf60c9d10",
+      "name": "Parsed OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
       "position": [
-        624,
-        0
+        1320,
+        200
       ],
-      "name": "Code in JavaScript1"
-    },
-    {
-      "id": "a3ad3e5c-bd3e-4b71-a097-d783993c283f",
       "parameters": {
-        "assignments": {
-          "assignments": [
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
             {
-              "id": "5b361da3-3a1f-44d7-81af-12f5d77c955b",
-              "name": "=obsidian_final",
-              "value": "=--- date: {{$now.format('yyyy-MM-dd')}} tags: [{{$json.tags.join(', ')}}] ---  # {{$json.title}}  {{$json.body_markdown}}",
-              "type": "string"
+              "id": "a5b4ed0f-b3f4-559e-8adc-532b28b4eae8",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
             }
-          ]
+          ],
+          "combinator": "and"
         },
-        "options": {
-          "includeOtherFields": true
-        }
-      },
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
-      "position": [
-        832,
-        0
-      ],
-      "name": "Edit Fields"
+        "options": {}
+      }
     },
     {
-      "id": "f1244288-a321-48d2-911d-9617decb535e",
+      "id": "9607b55e-66a1-5db2-8fb7-eab9e43e4196",
+      "name": "Skip duplicate photos",
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        100
+      ],
       "parameters": {
-        "jsCode": "// 1. Read the existing Raw notes.md content\nconst existingBuffer = await this.helpers.getBinaryDataBuffer(0, 'existing');\nconst existingText = existingBuffer.toString('utf8');\n\n// 2. Grab the new formatted entry created in the Edit Fields node\nconst newEntry = $('Edit Fields').item.json.obsidian_final;\n\n// 3. Append the new entry to the end, separated by a blank line\nconst combined = existingText.replace(/\\s+$/, '') + '\\n\\n' + newEntry + '\\n';\n\n// 4. Convert the combined text into a binary package (Base64)\nconst binaryData = Buffer.from(combined, 'utf8').toString('base64');\n\n// 5. Attach it to the n8n memory as a file named 'data'\n$input.item.binary = {\n  'data': {\n    data: binaryData,\n    mimeType: 'text/markdown',\n    fileExtension: 'md'\n  }\n};\n\nreturn $input.item;"
-      },
+        "operation": "removeItemsSeenInPreviousExecutions",
+        "dedupeValue": "={{ $json.hash }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "0439530a-14ec-543b-af47-d6662d60af94",
+      "name": "Build note",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1040,
-        0
+        1760,
+        100
       ],
-      "name": "Code in JavaScript2"
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// One transcribed photo becomes one markdown file in the Raw notes folder.\nconst RAW_DIR = '/path/to/your/Obsidian Vault/Raw notes';\nconst TZ = 'Asia/Dhaka';\nconst n = $input.item.json;\n\nconst received = DateTime.fromJSDate(new Date(n.received)).setZone(TZ);\nconst captured = received.isValid ? received : DateTime.now().setZone(TZ);\nconst noteDate = /^\\d{4}-\\d{2}-\\d{2}$/.test(n.date || '') ? n.date : captured.toFormat('yyyy-MM-dd');\n\nconst title = String(n.title || '').replace(/\\s+/g, ' ').trim() || 'Untitled';\nconst safeTitle = title.replace(/[\\\\/:]/g, '-').replace(/[*?\"<>|#^\\[\\]]/g, '').replace(/\\s+/g, ' ').trim().slice(0, 80) || 'Untitled';\nconst suffix = n.photoIndex > 1 ? ` (${n.photoIndex})` : '';\nconst fileName = `${captured.toFormat('yyyy-MM-dd HHmm')} ${safeTitle}${suffix}.md`;\n\n// Obsidian tags: lowercase, no spaces, not purely numeric\nconst tags = [...new Set((n.tags || [])\n  .map(t => String(t).toLowerCase().trim().replace(/^#/, '').replace(/\\s+/g, '-').replace(/[^\\p{L}\\p{N}_\\/-]/gu, ''))\n  .filter(t => t && !/^\\d+$/.test(t)))];\n\n// Drop a leading heading that only repeats the title\nconst titlePattern = title.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\nconst body = String(n.body_markdown || '')\n  .replace(new RegExp('^\\\\s*#{1,6}\\\\s*' + titlePattern + '\\\\s*(\\\\n|$)', 'i'), '')\n  .trim();\n\nconst q = value => JSON.stringify(String(value ?? '')); // a JSON string is a valid YAML string\nconst text = [\n  '---',\n  `title: ${q(title)}`,\n  `date: ${noteDate}`,\n  `first_captured: ${captured.toFormat(\"yyyy-MM-dd'T'HH:mm\")}`,\n  tags.length ? 'tags:\\n' + tags.map(t => `  - ${t}`).join('\\n') : 'tags: []',\n  'type: raw-note',\n  'status: inbox',\n  `source: ${q('email: ' + n.subject)}`,\n  `photo: ${q(n.photoName)}`,\n  '---',\n  '',\n  `# ${title}`,\n  '',\n  body,\n  '',\n].join('\\n');\n\nreturn {\n  json: { path: `${RAW_DIR}/${fileName}`, fileName, title },\n  binary: {\n    data: { data: Buffer.from(text, 'utf8').toString('base64'), mimeType: 'text/markdown', fileName, fileExtension: 'md' },\n  },\n};\n"
+      }
     },
     {
-      "id": "a1b7e36b-4b47-4a3e-8f02-043193af3556",
+      "id": "d6faf23b-43e4-5316-9f6f-400abbaa58f7",
+      "name": "Write note",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        100
+      ],
       "parameters": {
         "operation": "write",
-        "fileName": "/path/to/your/Obsidian Vault/Notes Compressor/Raw notes.md",
+        "fileName": "={{ $json.path }}",
         "options": {}
-      },
-      "type": "n8n-nodes-base.readWriteFile",
-      "typeVersion": 1.1,
-      "position": [
-        1248,
-        0
-      ],
-      "name": "Read/Write Files from Disk1"
+      }
     },
     {
-      "id": "9d6f4a1e-2222-4b1a-8f36-read0raw0notes",
+      "id": "983da3ac-2349-5004-81c8-116a1da6ebb1",
+      "name": "Build failure note",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        480
+      ],
       "parameters": {
-        "operation": "read",
-        "fileSelector": "/path/to/your/Obsidian Vault/Notes Compressor/Raw notes.md",
-        "options": {
-          "dataPropertyName": "existing"
-        }
-      },
+        "jsCode": "// Anything that couldn't be transcribed lands in _failed/: a note explaining why, plus the original photo.\n// Nothing is lost even though the email has already been marked as read.\nconst FAIL_DIR = '/path/to/your/Obsidian Vault/Raw notes/_failed';\nconst TZ = 'Asia/Dhaka';\n\nfunction describe(err) {\n  if (!err) return 'Unknown error';\n  if (typeof err === 'string') return err;\n  return [err.message, err.description].filter(Boolean).join(' | ') || JSON.stringify(err).slice(0, 2000);\n}\n\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const j = items[i].json;\n  const src = $('Split photos').itemMatching(i).json;\n  const received = DateTime.fromJSDate(new Date(src.received)).setZone(TZ);\n  const when = received.isValid ? received : DateTime.now().setZone(TZ);\n  const base = `${when.toFormat('yyyy-MM-dd HHmm')} failed - email ${src.uid || 'unknown'}${src.photoIndex ? '-' + src.photoIndex : ''}`;\n  const ext = (src.mimeType || '').split('/')[1] || 'jpg';\n  const photoFile = src.image_base64 ? `${base}.${ext === 'jpeg' ? 'jpg' : ext}` : '';\n\n  const text = [\n    '---',\n    'type: failed-capture',\n    'status: needs-retry',\n    `first_captured: ${when.toFormat(\"yyyy-MM-dd'T'HH:mm\")}`,\n    `source: ${JSON.stringify('email: ' + (src.subject || ''))}`,\n    '---',\n    '',\n    '# Brain Dump capture failed',\n    '',\n    `**Error:** ${describe(j.error)}`,\n    '',\n    `**Email:** \"${src.subject || ''}\" from ${src.from || '?'}, received ${src.received || '?'}`,\n    src.photoName ? `**Photo:** ${src.photoName} (${((src.sizeBytes || 0) / 1048576).toFixed(1)} MB)` : '',\n    '',\n    photoFile ? `![[${photoFile}]]` : '',\n    '',\n    '**To retry:** send the photo again in a new email with the subject \"Brain Dump\". Delete this note (and its photo) once it is handled.',\n    '',\n  ].join('\\n');\n\n  out.push({\n    json: { path: `${FAIL_DIR}/${base}.md` },\n    binary: { data: { data: Buffer.from(text, 'utf8').toString('base64'), mimeType: 'text/markdown', fileName: `${base}.md`, fileExtension: 'md' } },\n  });\n  if (photoFile) {\n    out.push({\n      json: { path: `${FAIL_DIR}/${photoFile}` },\n      binary: { data: { data: src.image_base64, mimeType: src.mimeType, fileName: photoFile, fileExtension: ext } },\n    });\n  }\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "458ef6e7-4359-5602-a4a2-d97af6a30202",
+      "name": "Write to _failed",
       "type": "n8n-nodes-base.readWriteFile",
       "typeVersion": 1.1,
       "position": [
-        1040,
-        -120
+        1760,
+        480
       ],
-      "name": "Read Raw Notes"
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $json.path }}",
+        "options": {}
+      }
     }
   ],
   "connections": {
+    "Split photos": {
+      "main": [
+        [
+          {
+            "node": "Photo OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Photo OK?": {
+      "main": [
+        [
+          {
+            "node": "Claude (vision)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build failure note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude (vision)": {
+      "main": [
+        [
+          {
+            "node": "Parse reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build failure note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse reply": {
+      "main": [
+        [
+          {
+            "node": "Parsed OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsed OK?": {
+      "main": [
+        [
+          {
+            "node": "Skip duplicate photos",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build failure note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip duplicate photos": {
+      "main": [
+        [
+          {
+            "node": "Build note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build note": {
+      "main": [
+        [
+          {
+            "node": "Write note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build failure note": {
+      "main": [
+        [
+          {
+            "node": "Write to _failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Email Trigger (IMAP)": {
       "main": [
         [
           {
-            "node": "Code in JavaScript",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code in JavaScript": {
-      "main": [
-        [
-          {
-            "node": "HTTP Request",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HTTP Request": {
-      "main": [
-        [
-          {
-            "node": "Code in JavaScript1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code in JavaScript1": {
-      "main": [
-        [
-          {
-            "node": "Edit Fields",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Edit Fields": {
-      "main": [
-        [
-          {
-            "node": "Read Raw Notes",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code in JavaScript2": {
-      "main": [
-        [
-          {
-            "node": "Read/Write Files from Disk1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Read Raw Notes": {
-      "main": [
-        [
-          {
-            "node": "Code in JavaScript2",
+            "node": "Split photos",
             "type": "main",
             "index": 0
           }
@@ -237,7 +353,11 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "timezone": "Asia/Dhaka",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": true
   },
   "pinData": {}
 }

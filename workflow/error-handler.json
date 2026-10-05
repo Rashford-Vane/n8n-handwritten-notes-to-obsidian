@@ -1,0 +1,73 @@
+{
+  "name": "Email-Obsidian error handler",
+  "nodes": [
+    {
+      "id": "b0bd6674-9ff5-5f36-8a87-d73e70ff8ced",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "5281ad6e-4292-5af2-bfc2-8d72bc3dc34e",
+      "name": "Build error note",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Catches anything the main workflow didn't handle itself and leaves a note in _failed/.\nconst FAIL_DIR = '/path/to/your/Obsidian Vault/Raw notes/_failed';\nconst TZ = 'Asia/Dhaka';\nconst e = $input.first().json;\nconst now = DateTime.now().setZone(TZ);\nconst fileName = `${now.toFormat('yyyy-MM-dd HHmmss')} workflow error.md`;\nconst err = (e.execution && e.execution.error) || {};\nconst text = [\n  '---',\n  'type: failed-capture',\n  'status: needs-retry',\n  `first_captured: ${now.toFormat(\"yyyy-MM-dd'T'HH:mm\")}`,\n  '---',\n  '',\n  `# Workflow error: ${e.workflow ? e.workflow.name : 'unknown workflow'}`,\n  '',\n  `**Error:** ${err.message || 'unknown'}`,\n  `**Failed node:** ${(e.execution && e.execution.lastNodeExecuted) || '?'}`,\n  `**Execution:** ${(e.execution && e.execution.url) || (e.execution && e.execution.id) || '?'}`,\n  '',\n  'The email that triggered this run has already been marked as read. Open the execution in n8n to see which one it was, then send it again.',\n  '',\n  '```',\n  String(err.stack || '').split('\\n').slice(0, 15).join('\\n'),\n  '```',\n  '',\n].join('\\n');\nreturn [{\n  json: { path: `${FAIL_DIR}/${fileName}` },\n  binary: { data: { data: Buffer.from(text, 'utf8').toString('base64'), mimeType: 'text/markdown', fileName, fileExtension: 'md' } },\n}];\n"
+      }
+    },
+    {
+      "id": "5819408f-cbdf-57a5-8cb1-7ed435f394c8",
+      "name": "Write to _failed",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $json.path }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build error note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build error note": {
+      "main": [
+        [
+          {
+            "node": "Write to _failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Dhaka"
+  },
+  "pinData": {}
+}
