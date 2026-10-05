@@ -1,0 +1,17 @@
+# systemd user unit: ~/.config/systemd/user/n8n.service
+# Enable with: systemctl --user daemon-reload && systemctl --user enable --now n8n
+[Unit]
+Description=n8n workflow automation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# n8n 2.x only lets file nodes touch these folders (separated by ';'). Put your vault here.
+Environment="N8N_RESTRICT_FILE_ACCESS_TO=/path/to/your/Obsidian Vault;%h/.n8n-files"
+ExecStart=/usr/bin/n8n start
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

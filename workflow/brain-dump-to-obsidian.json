@@ -1,0 +1,243 @@
+{
+  "name": "Handwritten notes to Obsidian (Brain Dump)",
+  "nodes": [
+    {
+      "id": "3bcc699b-4c6e-4f8e-91ef-06d45f33d759",
+      "parameters": {
+        "downloadAttachments": true,
+        "options": {
+          "customEmailConfig": "[\"UNSEEN\", [\"SUBJECT\", \"Brain Dump\"]]"
+        }
+      },
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Email Trigger (IMAP)",
+      "credentials": {
+        "imap": {
+          "name": "IMAP account"
+        }
+      }
+    },
+    {
+      "id": "15ec08cd-6aa9-4d95-b429-0205f2549f9c",
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfor (let i = 0; i < items.length; i++) {\n  // 1. Pull the image out of n8n's hidden buffer storage\n  const buffer = await this.helpers.getBinaryDataBuffer(i, 'attachment_0');\n  \n  // 2. Convert the image bytes into a Base64 text string\n  items[i].json.image_base64 = buffer.toString('base64');\n}\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "name": "Code in JavaScript"
+    },
+    {
+      "id": "c5c1532d-5e0c-490d-8e82-ba6053852f13",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-5\",\n  \"max_tokens\": 1024,\n  \"system\": \"Transcribe the handwritten note in the image. Respond ONLY with valid JSON matching this schema: {\\\"title\\\": \\\"string\\\", \\\"date\\\": \\\"string\\\", \\\"tags\\\": [\\\"array\\\"], \\\"body_markdown\\\": \\\"string\\\"}\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": [\n      {\n        \"type\": \"image\",\n        \"source\": {\n          \"type\": \"base64\",\n          \"media_type\": \"image/jpeg\",\n          \"data\": \"{{ $json.image_base64 }}\"\n        }\n      },\n      {\n        \"type\": \"text\",\n        \"text\": \"Transcribe and structure this note.\"\n      }\n    ]\n  }]\n}",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        416,
+        0
+      ],
+      "name": "HTTP Request",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Anthropic API Key (x-api-key header)"
+        }
+      }
+    },
+    {
+      "id": "12cc6041-2c32-4f8e-a559-2d4417fb712d",
+      "parameters": {
+        "jsCode": "// 1. Grab the raw text response from Claude\nlet rawText = $input.item.json.content[0].text;\n\n// 2. Strip out the Markdown formatting (```json and ```)\nrawText = rawText.replace(/```json/gi, '').replace(/```/gi, '').trim();\n\n// 3. Convert it from a text string into usable data fields\nconst parsedData = JSON.parse(rawText);\n\n// 4. Pass it to the next node\nreturn { json: parsedData };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        0
+      ],
+      "name": "Code in JavaScript1"
+    },
+    {
+      "id": "a3ad3e5c-bd3e-4b71-a097-d783993c283f",
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5b361da3-3a1f-44d7-81af-12f5d77c955b",
+              "name": "=obsidian_final",
+              "value": "=--- date: {{$now.format('yyyy-MM-dd')}} tags: [{{$json.tags.join(', ')}}] ---  # {{$json.title}}  {{$json.body_markdown}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "includeOtherFields": true
+        }
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        832,
+        0
+      ],
+      "name": "Edit Fields"
+    },
+    {
+      "id": "f1244288-a321-48d2-911d-9617decb535e",
+      "parameters": {
+        "jsCode": "// 1. Read the existing Raw notes.md content\nconst existingBuffer = await this.helpers.getBinaryDataBuffer(0, 'existing');\nconst existingText = existingBuffer.toString('utf8');\n\n// 2. Grab the new formatted entry created in the Edit Fields node\nconst newEntry = $('Edit Fields').item.json.obsidian_final;\n\n// 3. Append the new entry to the end, separated by a blank line\nconst combined = existingText.replace(/\\s+$/, '') + '\\n\\n' + newEntry + '\\n';\n\n// 4. Convert the combined text into a binary package (Base64)\nconst binaryData = Buffer.from(combined, 'utf8').toString('base64');\n\n// 5. Attach it to the n8n memory as a file named 'data'\n$input.item.binary = {\n  'data': {\n    data: binaryData,\n    mimeType: 'text/markdown',\n    fileExtension: 'md'\n  }\n};\n\nreturn $input.item;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ],
+      "name": "Code in JavaScript2"
+    },
+    {
+      "id": "a1b7e36b-4b47-4a3e-8f02-043193af3556",
+      "parameters": {
+        "operation": "write",
+        "fileName": "/path/to/your/Obsidian Vault/Notes Compressor/Raw notes.md",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1248,
+        0
+      ],
+      "name": "Read/Write Files from Disk1"
+    },
+    {
+      "id": "9d6f4a1e-2222-4b1a-8f36-read0raw0notes",
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "/path/to/your/Obsidian Vault/Notes Compressor/Raw notes.md",
+        "options": {
+          "dataPropertyName": "existing"
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        -120
+      ],
+      "name": "Read Raw Notes"
+    }
+  ],
+  "connections": {
+    "Email Trigger (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Read Raw Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Raw Notes": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
